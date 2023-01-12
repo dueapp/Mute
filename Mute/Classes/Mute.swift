@@ -36,18 +36,27 @@ public class Mute: NSObject {
     /// Current mute state
     public private(set) var isMute = false
 
-    /// Sound is scheduled
-    private var isScheduled = false
+    /// Internal flag tracking whether a check has been scheduled to take place
+    private var checkIsScheduled = false
 
     /// State of detection - paused when in background
     public var isPaused = false {
         didSet {
             if !self.isPaused && oldValue && !self.isPlaying {
-                self.schedulePlaySound()
+                self.schedulePlaySoundIfNeeded()
             }
         }
     }
-
+    
+    /// Whether checks are scheduled to take place at `checkInterval`
+    public var scheduled = false {
+        didSet {
+            if scheduled {
+                schedulePlaySoundIfNeeded()
+            }
+        }
+    }
+    
     /// How frequently to check (seconds), minimum = 0.5
     public var checkInterval = 1.0 {
         didSet {
@@ -116,8 +125,6 @@ public class Mute: NSObject {
                                      &self.soundId,
                                      UInt32(MemoryLayout.size(ofValue: yes)),
                                      &yes)
-
-            self.schedulePlaySound()
         } else {
             print("Failed to setup sound player")
             self.soundId = 0
@@ -158,19 +165,22 @@ public class Mute: NSObject {
     // MARK: Methods
 
     /// Starts a mute check outside the `checkInterval`
-    public func check() {
-        self.playSound()
+    public func check(completion: MuteNotificationCompletion?) {
+        self.playSound(completion: completion)
     }
 
     /// Schedules mute sound to be played at `checkInterval`
-    private func schedulePlaySound() {
+    private func schedulePlaySoundIfNeeded() {
+        /// Don't start a schedule if we're not asked to
         /// Don't schedule a new one if we already have one queued
-        if self.isScheduled { return }
+        guard scheduled, self.checkIsScheduled == false else {
+            return
+        }
 
-        self.isScheduled = true
+        self.checkIsScheduled = true
 
         DispatchQueue.main.asyncAfter(deadline: .now() + self.checkInterval) {
-            self.isScheduled = false
+            self.checkIsScheduled = false
 
             /// Don't play if we're paused
             if self.isPaused {
@@ -182,18 +192,18 @@ public class Mute: NSObject {
     }
 
     /// If not paused, playes mute sound
-    private func playSound() {
+    private func playSound(completion: MuteNotificationCompletion? = nil) {
         if !self.isPaused && !self.isPlaying {
             self.interval = Date.timeIntervalSinceReferenceDate
             self.isPlaying = true
             AudioServicesPlaySystemSoundWithCompletion(self.soundId) { [weak self] in
-                self?.soundFinishedPlaying()
+                self?.soundFinishedPlaying(completion: completion)
             }
         }
     }
 
     /// Called when AudioService finished playing sound
-    private func soundFinishedPlaying() {
+    private func soundFinishedPlaying(completion: MuteNotificationCompletion? = nil) {
         self.isPlaying = false
 
         let elapsed = Date.timeIntervalSinceReferenceDate - self.interval
@@ -203,8 +213,9 @@ public class Mute: NSObject {
             self.isMute = isMute
             DispatchQueue.main.async {
                 self.notify?(isMute)
+                completion?(isMute)
             }
         }
-        self.schedulePlaySound()
+        self.schedulePlaySoundIfNeeded()
     }
 }
